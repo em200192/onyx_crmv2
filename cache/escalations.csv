@@ -1,0 +1,5 @@
+﻿ticket_id,timestamp_utc,query,reason,status
+CASE-0510-7A34,2025-10-05T10:52:14.850650+00:00,عدم وجود مخزن في النظام,not_found_in_kb,pending
+CASE-0510-2972,2025-10-05T11:23:31.572566+00:00,2001,number_not_in_kb,done
+CASE-0610-A8B0,2025-10-06T10:16:50.751402+00:00,010010,number_not_in_kb,pending
+CASE-0610-EF0C,2025-10-06T13:02:04.529585+00:00,مشكلة رقم 99999,number_not_in_kb,pending
