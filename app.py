@@ -338,6 +338,36 @@ def create_error_id_extractor_chain():
     return LLMChain(llm=llm, prompt=prompt, verbose=False)
 
 
+def _upload_history_to_gcs(ticket_id: str):
+    """Uploads the current chat history to GCS as a JSON file."""
+    if not GCS_BUCKET_NAME:
+        return None
+
+    try:
+        from google.cloud import storage
+        from google.oauth2 import service_account
+
+        # Assumes your GCS credentials are in [gcp_service_account]
+        creds_info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        client = storage.Client(credentials=creds, project=creds.project_id)
+        bucket = client.bucket(GCS_BUCKET_NAME)
+
+        object_name = f"escalation_logs/{ticket_id}.json"
+
+        chat_history = st.session_state.get("chat_history", [])
+        history_json = json.dumps(chat_history, ensure_ascii=False, indent=2)
+
+        blob = bucket.blob(object_name)
+        blob.upload_from_string(history_json, content_type="application/json")
+
+        print(f"--- SUCCESS: Uploaded chat history for ticket {ticket_id} to GCS. ---")
+        return f"gs://{GCS_BUCKET_NAME}/{object_name}"
+
+    except Exception as e:
+        st.error(f"⚠️ Failed to upload chat history to GCS: {e}")
+        return None
+
 @st.cache_resource
 def create_guide_router_chain():
     """
@@ -1798,11 +1828,7 @@ def _upload_case_to_gcs(user_query: str):
 def _escalate_and_reset(ticket_id: str,user_query: str, preface: str = None):
     # Upload snapshot before resetting state
 
-
-    gcs_uri = _upload_case_to_gcs(user_query)
-
-    if gcs_uri:
-        st.session_state.last_escalation_uri = gcs_uri
+    _upload_history_to_gcs(ticket_id)
 
     parts = []
     if preface:
