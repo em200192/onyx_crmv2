@@ -75,20 +75,24 @@ def get_gsheet():
 
 # --- DATABASE FUNCTIONS ---
 def submit_solution_for_review_db(new_entry: dict):
-    # MODIFIED: Now only gets the collection it needs.
+    """Adds or UPDATES a solution in the pending review collection using upsert."""
     pending_collection = get_pending_kb_collection()
-    review_id = f"review_{uuid4().hex[:8]}"
+
+    # Use the existing review_id if this is an update, or create a new one if it's a new entry.
+    review_id = new_entry.get("review_id") or f"review_{uuid4().hex[:8]}"
+
     document_text = f"Error {new_entry.get('message_number', '')}: {new_entry.get('message_text', '')}"
     clean_metadata = {k: v for k, v in new_entry.items() if v is not None}
+    # Ensure review_id is in the metadata for consistency
+    clean_metadata['review_id'] = review_id
 
-    new_entry["review_id"] = review_id
-    pending_collection.add(
+    # --- THIS IS THE FIX ---
+    # Use upsert() to either create a new entry or update an existing one based on the ID.
+    pending_collection.upsert(
         ids=[review_id],
         metadatas=[clean_metadata],
         documents=[document_text]
-
     )
-
 def approve_solution_db(solution: dict):
     live_collection, pending_collection = get_collections()
     review_id = solution.pop("review_id", None)
@@ -159,6 +163,37 @@ def log_escalation_gsheet(ticket_id: str, query: str, reason: str):
     sheet = get_gsheet()
     sheet.append_row([ticket_id, datetime.now(timezone.utc).isoformat(), query, reason, "pending"])
 
+
+def load_conversation_history_from_gcs(ticket_id: str):
+    """Downloads and parses a chat history JSON file from GCS."""
+    if not ticket_id:
+        return None
+    try:
+        from google.cloud import storage
+        from google.oauth2 import service_account
+        import json  # Make sure json is imported
+
+        creds_info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        client = storage.Client(credentials=creds, project=creds.project_id)
+
+        bucket_name = st.secrets["gcs"]["bucket_name"]
+        if not bucket_name: return None
+
+        bucket = client.bucket(bucket_name)
+        object_name = f"escalation_logs/{ticket_id}.json"
+
+        blob = bucket.blob(object_name)
+        if blob.exists():
+            history_json = blob.download_as_string()
+            return json.loads(history_json)
+        else:
+            print(f"History file not found in GCS: {object_name}")
+            return None
+
+    except Exception as e:
+        st.error(f"Failed to load chat history from GCS: {e}")
+        return None
 
 def load_escalations_gsheet():
     sheet = get_gsheet()
