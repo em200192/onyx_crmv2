@@ -4,6 +4,9 @@ from pathlib import Path
 from uuid import uuid4
 import re
 
+
+from db_utils import load_conversation_history_from_gcs
+
 # --- MODIFIED: Import all necessary db_utils functions ---
 from db_utils import (
     load_escalations_gsheet,
@@ -21,6 +24,33 @@ os.makedirs(SOLUTION_IMG_DIR, exist_ok=True)
 st.set_page_config(page_title="Advisor Panel", layout="wide")
 st.title("👨‍🏫 Advisor Panel: Knowledge Base Management")
 
+
+def upload_image_to_gcs(image_file, filename: str):
+    """Uploads an image file to GCS and returns its public URL."""
+    try:
+        from google.cloud import storage
+        from google.oauth2 import service_account
+
+        creds_info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        client = storage.Client(credentials=creds, project=creds.project_id)
+
+        bucket_name = st.secrets["gcs"]["bucket_name"]
+        bucket = client.bucket(bucket_name)
+
+        # Define the path within the bucket
+        object_name = f"solution_images/{filename}"
+        blob = bucket.blob(object_name)
+
+        # Upload the file
+        image_file.seek(0)  # Go to the beginning of the file
+        blob.upload_from_file(image_file)
+
+        # Return the public URL
+        return blob.public_url
+    except Exception as e:
+        st.error(f"Failed to upload image to GCS: {e}")
+        return None
 # --- UI Layout with Tabs ---
 
 # --- CORRECTED: Load pending escalations from Google Sheets ---
@@ -47,15 +77,27 @@ with tab1:
 
         if selected_option_key:
             selected_row = options_dict[selected_option_key]
+            ticket_id = selected_row.get("ticket_id")
 
             st.subheader(f"Resolving Ticket: {selected_row['ticket_id']}")
             st.write(f"**Original User Query:** `{selected_row['query']}`")
 
+            if ticket_id:
+                history = load_conversation_history_from_gcs(ticket_id)
+                if history:
+                    with st.expander("View Full Conversation History"):
+                        for msg in history:
+                            role = msg.get("role", "unknown").capitalize()
+                            content = msg.get("content", "")
+                            if role == "User":
+                                st.markdown(f"👤 **{role}:** {content}")
+                            else:
+                                st.markdown(f"🤖 **{role}:** {content}")
             with st.form("resolve_form"):
+                # REPLACE the line above with this corrected version
                 message_number = st.text_input("Message Number*",
-                                               value=re.findall(r'\d+', selected_row['query'])[0] if re.findall(r'\d+',
-                                                                                                                selected_row[
-                                                                                                                    'query']) else "")
+                                               value=re.findall(r'\d+', str(selected_row['query']))[0] if re.findall(
+                                                   r'\d+', str(selected_row['query'])) else "")
                 message_text = st.text_area("Message Text*", value=selected_row['query'])
                 location = st.text_input("Location / Screen")
                 reason = st.text_area("Reason*")
@@ -74,9 +116,7 @@ with tab1:
                         if solution_image is not None:
                             file_extension = solution_image.name.split('.')[-1]
                             unique_filename = f"sol_{message_number.strip()}_{uuid4().hex[:6]}.{file_extension}"
-                            image_path = str(SOLUTION_IMG_DIR / unique_filename)
-                            with open(image_path, "wb") as f:
-                                f.write(solution_image.getbuffer())
+                            image_path = upload_image_to_gcs(solution_image, unique_filename)
 
                         new_solution_entry = {
                             "ticket_id": selected_row['ticket_id'],
@@ -106,6 +146,7 @@ with tab2:
     with st.form("add_new_form", clear_on_submit=True):
         st.subheader("New Error Details")
 
+
         message_number = st.text_input("Message Number*")
         message_text = st.text_area("Message Text*")
         location = st.text_input("Location / Screen")
@@ -125,10 +166,8 @@ with tab2:
                 if solution_image is not None:
                     file_extension = solution_image.name.split('.')[-1]
                     unique_filename = f"sol_{message_number.strip()}_{uuid4().hex[:6]}.{file_extension}"
-                    image_path = SOLUTION_IMG_DIR / unique_filename
-                    with open(image_path, "wb") as f:
-                        f.write(solution_image.getbuffer())
-                    image_path = str(image_path)
+                    # Call the new GCS upload function
+                    image_path = upload_image_to_gcs(solution_image, unique_filename)
 
                 new_solution_entry = {
                     "ticket_id": None,  # No ticket ID for manual entries
